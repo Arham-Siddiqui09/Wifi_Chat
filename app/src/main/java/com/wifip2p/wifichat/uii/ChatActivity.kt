@@ -218,8 +218,9 @@ class ChatActivity : ComponentActivity(),
                 return
             }
 
-            // Format: "<fileName>:<fileSize>:<mimeType>"
-            // Split from the right so colons in the filename are preserved.
+            // Header format: "<fileName>:<fileSize>:<mimeType>"
+            // fileSize is a number and mimeType contains no colons, so splitting from the
+            // right correctly handles colons that may appear inside the filename.
             val mimeType = parts.last()
             val fileSize = parts[parts.size - 2].toLong()
             val fileName = parts.dropLast(2).joinToString(":")
@@ -240,7 +241,7 @@ class ChatActivity : ComponentActivity(),
             }
             fileSocket.close()
 
-            val messageType = if (mimeType.startsWith("image/")) MessageType.IMAGE else MessageType.FILE
+            val messageType = messageTypeFromMimeType(mimeType)
             runOnUiThread {
                 messagesState.add(
                     ChatMessage(
@@ -286,7 +287,7 @@ class ChatActivity : ComponentActivity(),
         }
 
         val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
-        val messageType = if (mimeType.startsWith("image/")) MessageType.IMAGE else MessageType.FILE
+        val messageType = messageTypeFromMimeType(mimeType)
 
         messagesState.add(
             ChatMessage(
@@ -314,7 +315,7 @@ class ChatActivity : ComponentActivity(),
                 output.flush()
                 fileSocket.close()
             } catch (e: Exception) {
-                runOnUiThread { addSystemMessage("File send failed: ${e.message ?: "unknown error"}") }
+                runOnUiThread { addSystemMessage("File send failed: ${e.javaClass.simpleName} - ${e.message ?: "check connection"}") }
             }
         }.start()
     }
@@ -388,11 +389,16 @@ class ChatActivity : ComponentActivity(),
 
 enum class MessageType { TEXT, IMAGE, FILE }
 
+fun messageTypeFromMimeType(mimeType: String): MessageType =
+    if (mimeType.startsWith("image/")) MessageType.IMAGE else MessageType.FILE
+
 data class ChatMessage(
     val text: String,
     val isSentByMe: Boolean,
     val isSystemMessage: Boolean = false,
     val messageType: MessageType = MessageType.TEXT,
+    // Received files: absolute file path on disk. Sent files: content URI string.
+    // openFile() is only invoked for received (non-sent) messages.
     val filePath: String? = null,
     val fileName: String? = null,
     val fileSize: Long? = null,
@@ -405,8 +411,8 @@ data class ChatMessage(
         val bytes = fileSize ?: return ""
         return when {
             bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-            else -> "${bytes / (1024 * 1024)} MB"
+            bytes < 1024 * 1024 -> String.format("%.1f KB", bytes / 1024.0)
+            else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
         }
     }
 }
@@ -661,7 +667,7 @@ private fun openFile(context: Context, filePath: String, fileName: String) {
         context.startActivity(intent)
     } catch (e: Exception) {
         e.printStackTrace()
-        Toast.makeText(context, "Cannot open file: ${e.message ?: "no app available"}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Cannot open file: ${e.javaClass.simpleName}", Toast.LENGTH_SHORT).show()
     }
 }
 
