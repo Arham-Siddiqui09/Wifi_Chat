@@ -10,6 +10,7 @@ import android.os.Environment
 import android.provider.OpenableColumns
 import android.util.Log
 import android.webkit.MimeTypeMap
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -211,11 +212,17 @@ class ChatActivity : ComponentActivity(),
             val input = DataInputStream(fileSocket.getInputStream())
             val header = input.readUTF()
             val parts = header.split(":")
-            if (parts.size < 3) return
+            if (parts.size < 3) {
+                Log.w("CHAT", "Malformed file transfer header: $header")
+                runOnUiThread { addSystemMessage("File receive failed: invalid header") }
+                return
+            }
 
-            val fileName = parts[0]
-            val fileSize = parts[1].toLong()
-            val mimeType = parts[2]
+            // Format: "<fileName>:<fileSize>:<mimeType>"
+            // Split from the right so colons in the filename are preserved.
+            val mimeType = parts.last()
+            val fileSize = parts[parts.size - 2].toLong()
+            val fileName = parts.dropLast(2).joinToString(":")
 
             val downloadsDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                 ?: filesDir
@@ -253,20 +260,30 @@ class ChatActivity : ComponentActivity(),
 
     /* ---------------- FILE SENDER ---------------- */
 
-    fun sendFile(uri: Uri) {
+    private fun sendFile(uri: Uri) {
         val peerIp = peerIpAddress
         if (peerIp == null) {
             addSystemMessage("Not connected yet")
             return
         }
 
-        val cursor = contentResolver.query(uri, null, null, null, null)
-        val nameIndex = cursor?.getColumnIndex(OpenableColumns.DISPLAY_NAME) ?: -1
-        val sizeIndex = cursor?.getColumnIndex(OpenableColumns.SIZE) ?: -1
-        cursor?.moveToFirst()
-        val fileName = if (nameIndex >= 0) cursor?.getString(nameIndex) ?: "file" else "file"
-        val fileSize = if (sizeIndex >= 0) cursor?.getLong(sizeIndex) ?: 0L else 0L
-        cursor?.close()
+        val fileName: String
+        val fileSize: Long
+        try {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                cursor.moveToFirst()
+                fileName = if (nameIndex >= 0) cursor.getString(nameIndex) ?: "file" else "file"
+                fileSize = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
+            } ?: run {
+                fileName = "file"
+                fileSize = 0L
+            }
+        } catch (e: Exception) {
+            addSystemMessage("Could not read file info")
+            return
+        }
 
         val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
         val messageType = if (mimeType.startsWith("image/")) MessageType.IMAGE else MessageType.FILE
@@ -297,7 +314,7 @@ class ChatActivity : ComponentActivity(),
                 output.flush()
                 fileSocket.close()
             } catch (e: Exception) {
-                runOnUiThread { addSystemMessage("File send failed") }
+                runOnUiThread { addSystemMessage("File send failed: ${e.message ?: "unknown error"}") }
             }
         }.start()
     }
@@ -644,6 +661,7 @@ private fun openFile(context: Context, filePath: String, fileName: String) {
         context.startActivity(intent)
     } catch (e: Exception) {
         e.printStackTrace()
+        Toast.makeText(context, "Cannot open file: ${e.message ?: "no app available"}", Toast.LENGTH_SHORT).show()
     }
 }
 
