@@ -268,8 +268,8 @@ class ChatActivity : ComponentActivity(),
             return
         }
 
-        val fileName: String
-        val fileSize: Long
+        var fileName = "file"
+        var fileSize = 0L
         try {
             contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -277,9 +277,6 @@ class ChatActivity : ComponentActivity(),
                 cursor.moveToFirst()
                 fileName = if (nameIndex >= 0) cursor.getString(nameIndex) ?: "file" else "file"
                 fileSize = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
-            } ?: run {
-                fileName = "file"
-                fileSize = 0L
             }
         } catch (e: Exception) {
             addSystemMessage("Could not read file info")
@@ -670,4 +667,3 @@ private fun openFile(context: Context, filePath: String, fileName: String) {
         Toast.makeText(context, "Cannot open file: ${e.javaClass.simpleName}", Toast.LENGTH_SHORT).show()
     }
 }
-
