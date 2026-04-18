@@ -77,6 +77,9 @@ dependencies {
     // Coroutines (for async operations like sockets)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
+    // Coil for image loading in Compose
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
