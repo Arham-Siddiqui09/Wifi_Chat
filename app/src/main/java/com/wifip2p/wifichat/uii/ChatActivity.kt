@@ -2,6 +2,7 @@ package com.wifip2p.wifichat.uii
 
 import android.content.Context
 import android.content.Intent
+import android.content.ClipData
 import android.net.Uri
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
@@ -395,7 +396,7 @@ data class ChatMessage(
     val isSystemMessage: Boolean = false,
     val messageType: MessageType = MessageType.TEXT,
     // Received files: absolute file path on disk. Sent files: content URI string.
-    // openFile() is only invoked for received (non-sent) messages.
+    // openFile() supports both.
     val filePath: String? = null,
     val fileName: String? = null,
     val fileSize: Long? = null,
@@ -527,7 +528,12 @@ fun MessageBubble(message: ChatMessage) {
                     contentDescription = message.fileName,
                     modifier = Modifier
                         .widthIn(max = 250.dp)
-                        .clip(RoundedCornerShape(16.dp)),
+                        .clip(RoundedCornerShape(16.dp))
+                        .then(
+                            if (message.filePath != null)
+                                Modifier.clickable { openFile(context, message.filePath, message.fileName ?: message.text) }
+                            else Modifier
+                        ),
                     contentScale = ContentScale.Crop
                 )
             }
@@ -543,7 +549,7 @@ fun MessageBubble(message: ChatMessage) {
                     modifier = Modifier
                         .widthIn(max = 250.dp)
                         .then(
-                            if (!message.isSentByMe && message.filePath != null)
+                            if (message.filePath != null)
                                 Modifier.clickable { openFile(context, message.filePath, message.fileName ?: message.text) }
                             else Modifier
                         ),
@@ -646,22 +652,38 @@ fun MessageInput(
 
 private fun openFile(context: Context, filePath: String, fileName: String) {
     try {
-        val file = File(filePath)
-        val uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            file
-        )
+        val isContentUri = filePath.startsWith("content://") || filePath.startsWith("file://")
+        val uri = if (isContentUri) {
+            Uri.parse(filePath)
+        } else {
+            val file = File(filePath)
+            if (!file.exists()) {
+                Toast.makeText(context, "File not found", Toast.LENGTH_SHORT).show()
+                return
+            }
+            FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+        }
         val extension = fileName.substringAfterLast('.', "")
-        val mimeType = if (extension.isNotEmpty())
-            MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.lowercase()) ?: "*/*"
-        else "*/*"
+        val mimeTypeFromName = if (extension.isNotEmpty())
+            MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.lowercase())
+        else null
+        val mimeType = context.contentResolver.getType(uri) ?: mimeTypeFromName ?: "*/*"
 
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, mimeType)
-            flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newUri(context.contentResolver, fileName, uri)
         }
-        context.startActivity(intent)
+        val chooser = Intent.createChooser(intent, "Open with")
+        if (intent.resolveActivity(context.packageManager) != null) {
+            context.startActivity(chooser)
+        } else {
+            Toast.makeText(context, "No app found to open this file", Toast.LENGTH_SHORT).show()
+        }
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "Cannot open file: ${e.javaClass.simpleName}", Toast.LENGTH_SHORT).show()
