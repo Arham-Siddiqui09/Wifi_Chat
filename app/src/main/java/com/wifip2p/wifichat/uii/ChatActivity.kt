@@ -2,6 +2,7 @@ package com.wifip2p.wifichat.uii
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
@@ -651,9 +652,12 @@ fun MessageInput(
 
 private fun openFile(context: Context, filePath: String, fileName: String) {
     try {
-        val isAlreadyUri = filePath.startsWith("content://") || filePath.startsWith("file://")
-        val uri = if (isAlreadyUri) {
-            Uri.parse(filePath)
+        val parsedUri = runCatching { Uri.parse(filePath) }.getOrNull()
+        val uriScheme = parsedUri?.scheme?.lowercase(Locale.ROOT)
+        val isContentOrFileUri = uriScheme == "content" || uriScheme == "file"
+
+        val uri = if (isContentOrFileUri && parsedUri != null) {
+            parsedUri
         } else {
             val file = File(filePath)
             if (!file.exists()) {
@@ -670,14 +674,27 @@ private fun openFile(context: Context, filePath: String, fileName: String) {
         val mimeTypeFromName = if (extension.isNotEmpty())
             MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.lowercase())
         else null
-        val mimeType = context.contentResolver.getType(uri) ?: mimeTypeFromName ?: "*/*"
+        val mimeTypeFromResolver = context.contentResolver.getType(uri)
+        val mimeType = if (uriScheme == "content" && isContentOrFileUri) {
+            mimeTypeFromResolver ?: mimeTypeFromName ?: "*/*"
+        } else {
+            mimeTypeFromName ?: mimeTypeFromResolver ?: "*/*"
+        }
 
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        val chooser = Intent.createChooser(intent, "Open with")
-        context.startActivity(chooser)
+        val handlers = context.packageManager.queryIntentActivities(
+            intent,
+            PackageManager.MATCH_DEFAULT_ONLY
+        )
+        if (handlers.isNotEmpty()) {
+            val chooser = Intent.createChooser(intent, "Open with")
+            context.startActivity(chooser)
+        } else {
+            Toast.makeText(context, "No app found to open this file", Toast.LENGTH_SHORT).show()
+        }
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "Cannot open file: ${e.javaClass.simpleName}", Toast.LENGTH_SHORT).show()
