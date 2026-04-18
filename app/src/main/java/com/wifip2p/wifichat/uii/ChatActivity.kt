@@ -651,8 +651,8 @@ fun MessageInput(
 
 private fun openFile(context: Context, filePath: String, fileName: String) {
     try {
-        val isUriSchemePath = filePath.startsWith("content://") || filePath.startsWith("file://")
-        val uri = if (isUriSchemePath) {
+        val isAlreadyUri = filePath.startsWith("content://") || filePath.startsWith("file://")
+        val uri = if (isAlreadyUri) {
             Uri.parse(filePath)
         } else {
             val file = File(filePath)
@@ -677,11 +677,7 @@ private fun openFile(context: Context, filePath: String, fileName: String) {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         val chooser = Intent.createChooser(intent, "Open with")
-        if (chooser.resolveActivity(context.packageManager) != null) {
-            context.startActivity(chooser)
-        } else {
-            Toast.makeText(context, "No app found to open this file", Toast.LENGTH_SHORT).show()
-        }
+        context.startActivity(chooser)
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "Cannot open file: ${e.javaClass.simpleName}", Toast.LENGTH_SHORT).show()
