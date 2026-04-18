@@ -2,7 +2,6 @@ package com.wifip2p.wifichat.uii
 
 import android.content.Context
 import android.content.Intent
-import android.content.ClipData
 import android.net.Uri
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
@@ -652,8 +651,8 @@ fun MessageInput(
 
 private fun openFile(context: Context, filePath: String, fileName: String) {
     try {
-        val isDirectUriPath = filePath.startsWith("content://") || filePath.startsWith("file://")
-        val uri = if (isDirectUriPath) {
+        val isUriSchemePath = filePath.startsWith("content://") || filePath.startsWith("file://")
+        val uri = if (isUriSchemePath) {
             Uri.parse(filePath)
         } else {
             val file = File(filePath)
@@ -676,7 +675,6 @@ private fun openFile(context: Context, filePath: String, fileName: String) {
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            clipData = ClipData.newUri(context.contentResolver, fileName, uri)
         }
         val chooser = Intent.createChooser(intent, "Open with")
         if (chooser.resolveActivity(context.packageManager) != null) {
