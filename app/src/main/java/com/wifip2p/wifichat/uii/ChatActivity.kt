@@ -675,7 +675,7 @@ private fun openFile(context: Context, filePath: String, fileName: String) {
             MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.lowercase())
         else null
         val mimeTypeFromResolver = context.contentResolver.getType(uri)
-        val mimeType = if (uriScheme == "content" && isContentOrFileUri) {
+        val mimeType = if (uriScheme == "content") {
             mimeTypeFromResolver ?: mimeTypeFromName ?: "*/*"
         } else {
             mimeTypeFromName ?: mimeTypeFromResolver ?: "*/*"
