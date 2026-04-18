@@ -652,8 +652,8 @@ fun MessageInput(
 
 private fun openFile(context: Context, filePath: String, fileName: String) {
     try {
-        val isContentUri = filePath.startsWith("content://") || filePath.startsWith("file://")
-        val uri = if (isContentUri) {
+        val isDirectUriPath = filePath.startsWith("content://") || filePath.startsWith("file://")
+        val uri = if (isDirectUriPath) {
             Uri.parse(filePath)
         } else {
             val file = File(filePath)
@@ -679,7 +679,7 @@ private fun openFile(context: Context, filePath: String, fileName: String) {
             clipData = ClipData.newUri(context.contentResolver, fileName, uri)
         }
         val chooser = Intent.createChooser(intent, "Open with")
-        if (intent.resolveActivity(context.packageManager) != null) {
+        if (chooser.resolveActivity(context.packageManager) != null) {
             context.startActivity(chooser)
         } else {
             Toast.makeText(context, "No app found to open this file", Toast.LENGTH_SHORT).show()
