@@ -200,7 +200,7 @@ class ChatActivity : ComponentActivity(),
 
                     runOnUiThread {
                         messagesState.add(
-                            ChatMessage(msg, isSentByMe = false)
+                            ChatMessage(text = msg, isSentByMe = false)
                         )
                     }
                 }
@@ -349,7 +349,7 @@ class ChatActivity : ComponentActivity(),
         }
 
         messagesState.add(
-            ChatMessage(text, isSentByMe = true)
+            ChatMessage(text = text, isSentByMe = true)
         )
 
         Thread {
@@ -365,7 +365,7 @@ class ChatActivity : ComponentActivity(),
 
     private fun addSystemMessage(text: String) {
         messagesState.add(
-            ChatMessage(text, isSentByMe = false, isSystemMessage = true)
+            ChatMessage(text = text, isSentByMe = false, isSystemMessage = true)
         )
     }
 
