@@ -1,13 +1,17 @@
 package com.wifip2p.wifichat.uii
 
+import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Log
 import android.webkit.MimeTypeMap
@@ -27,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material3.*
@@ -38,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.wifip2p.wifichat.ui.theme.WifiChatTheme
@@ -64,6 +70,20 @@ class ChatActivity : ComponentActivity(),
     private val isGroupOwnerState = mutableStateOf(false)
     private var peerIpAddress: String? = null
 
+    // Save-to-phone: holds the message waiting for WRITE_EXTERNAL_STORAGE grant (API ≤ 28 only)
+    private var pendingSaveMessage: ChatMessage? = null
+
+    private val writePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            pendingSaveMessage?.let { doSaveToPhone(it) }
+        } else {
+            Toast.makeText(this, "Storage permission needed to save files", Toast.LENGTH_SHORT).show()
+        }
+        pendingSaveMessage = null
+    }
+
     private val messagesState = mutableStateListOf<ChatMessage>()
 
     private var socket: Socket? = null
@@ -84,6 +104,7 @@ class ChatActivity : ComponentActivity(),
                     messages = messagesState,
                     onSendMessage = { sendMessage(it) },
                     onSendFile = { sendFile(it) },
+                    onSaveToPhone = { handleSaveToPhone(it) },
                     onBackClick = { finish() }
                 )
             }
@@ -348,6 +369,143 @@ class ChatActivity : ComponentActivity(),
         )
     }
 
+    /* ---------------- SAVE TO PHONE ---------------- */
+
+    /**
+     * Entry point for saving a received file to public phone storage.
+     * On Android 9 (API 28, Build.VERSION_CODES.P) and below,
+     * requests WRITE_EXTERNAL_STORAGE if needed first.
+     */
+    private fun handleSaveToPhone(message: ChatMessage) {
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                pendingSaveMessage = message
+                writePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                return
+            }
+        }
+        doSaveToPhone(message)
+    }
+
+    /**
+     * Copies the received file from app-private storage to the user-visible
+     * Pictures/WifiChat (images) or Downloads/WifiChat (other files) folder.
+     * Uses MediaStore on Android 10+; direct file write on Android 9 and below.
+     */
+    private fun doSaveToPhone(message: ChatMessage) {
+        val filePath = message.filePath ?: run {
+            Toast.makeText(this, "File not available", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val fileName = message.fileName ?: message.text
+        val isImage = message.messageType == MessageType.IMAGE
+
+        Thread {
+            try {
+                val sourceFile = File(filePath)
+                if (!sourceFile.exists()) {
+                    runOnUiThread {
+                        Toast.makeText(this, "File not found on device", Toast.LENGTH_SHORT).show()
+                    }
+                    return@Thread
+                }
+
+                val extension = fileName.substringAfterLast('.', "").lowercase()
+                val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+                    ?: if (isImage) "image/jpeg" else "application/octet-stream"
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    // Android 10+: insert via MediaStore (no broad storage permission needed).
+                    // Append a millisecond suffix to the display name to avoid conflicts with
+                    // existing entries that share the same name and relative path.
+                    val uniqueName = appendTimestampSuffix(fileName)
+                    val relativePath = if (isImage)
+                        Environment.DIRECTORY_PICTURES + "/WifiChat"
+                    else
+                        Environment.DIRECTORY_DOWNLOADS + "/WifiChat"
+
+                    val collection = if (isImage)
+                        MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    else
+                        MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, uniqueName)
+                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                    }
+
+                    val uri = contentResolver.insert(collection, values)
+                        ?: throw IOException("MediaStore insert failed")
+
+                    contentResolver.openOutputStream(uri)?.use { out ->
+                        sourceFile.inputStream().use { it.copyTo(out) }
+                    }
+                } else {
+                    // Android 9 and below: write directly to public external storage
+                    val publicDir = if (isImage)
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+                    else
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    val destDir = File(publicDir, "WifiChat").also { it.mkdirs() }
+                    val destFile = generateUniqueFile(destDir, fileName)
+                    sourceFile.copyTo(destFile)
+                    // Notify the media scanner so the file appears in Gallery / Files
+                    sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE).apply {
+                        data = Uri.fromFile(destFile)
+                    })
+                }
+
+                runOnUiThread {
+                    val location = if (isImage) "Pictures/WifiChat" else "Downloads/WifiChat"
+                    Toast.makeText(this, "Saved to $location", Toast.LENGTH_SHORT).show()
+                    // Mark the message as saved so the button switches to a disabled state.
+                    // Use the stable unique id to find the correct entry in the list.
+                    val idx = messagesState.indexOfFirst { it.id == message.id }
+                    if (idx >= 0) messagesState[idx] = message.copy(isSavedToDevice = true)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                runOnUiThread {
+                    Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
+    }
+
+    /** Returns a unique [File] inside [dir] for the given [fileName], appending a counter if needed. */
+    private fun generateUniqueFile(dir: File, fileName: String): File {
+        var file = File(dir, fileName)
+        if (!file.exists()) return file
+        val nameWithoutExt = fileName.substringBeforeLast('.', fileName)
+        val ext = if (fileName.contains('.')) fileName.substringAfterLast('.') else ""
+        var counter = 1
+        while (file.exists()) {
+            val newName = if (ext.isNotEmpty()) "$nameWithoutExt($counter).$ext" else "$nameWithoutExt($counter)"
+            file = File(dir, newName)
+            counter++
+        }
+        return file
+    }
+
+    /**
+     * Inserts a millisecond timestamp before the file extension to produce a name
+     * that is unlikely to collide with existing MediaStore entries.
+     * E.g. "photo.jpg" → "photo_1713513600000.jpg"
+     */
+    private fun appendTimestampSuffix(fileName: String): String {
+        val ts = System.currentTimeMillis()
+        return if (fileName.contains('.')) {
+            val base = fileName.substringBeforeLast('.')
+            val ext = fileName.substringAfterLast('.')
+            "${base}_$ts.$ext"
+        } else {
+            "${fileName}_$ts"
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
 
@@ -391,6 +549,7 @@ fun messageTypeFromMimeType(mimeType: String): MessageType =
     if (mimeType.startsWith("image/")) MessageType.IMAGE else MessageType.FILE
 
 data class ChatMessage(
+    val id: String = UUID.randomUUID().toString(),
     val text: String,
     val isSentByMe: Boolean,
     val isSystemMessage: Boolean = false,
@@ -400,6 +559,7 @@ data class ChatMessage(
     val filePath: String? = null,
     val fileName: String? = null,
     val fileSize: Long? = null,
+    val isSavedToDevice: Boolean = false,
     val timestamp: Long = System.currentTimeMillis()
 ) {
     fun getFormattedTime(): String =
@@ -426,6 +586,7 @@ fun ChatScreen(
     messages: List<ChatMessage>,
     onSendMessage: (String) -> Unit,
     onSendFile: (Uri) -> Unit,
+    onSaveToPhone: (ChatMessage) -> Unit,
     onBackClick: () -> Unit
 ) {
     var messageText by remember { mutableStateOf("") }
@@ -477,8 +638,8 @@ fun ChatScreen(
                 state = listState,
                 contentPadding = PaddingValues(8.dp)
             ) {
-                items(messages) {
-                    MessageBubble(it)
+                items(messages) { message ->
+                    MessageBubble(message, onSaveToPhone = { onSaveToPhone(message) })
                 }
             }
 
@@ -499,7 +660,7 @@ fun ChatScreen(
 }
 
 @Composable
-fun MessageBubble(message: ChatMessage) {
+fun MessageBubble(message: ChatMessage, onSaveToPhone: () -> Unit) {
     val context = LocalContext.current
     when {
         message.isSystemMessage -> {
@@ -523,19 +684,35 @@ fun MessageBubble(message: ChatMessage) {
                     .padding(vertical = 4.dp),
                 horizontalArrangement = if (message.isSentByMe) Arrangement.End else Arrangement.Start
             ) {
-                AsyncImage(
-                    model = message.filePath,
-                    contentDescription = message.fileName,
-                    modifier = Modifier
-                        .widthIn(max = 250.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .then(
-                            if (message.filePath != null)
-                                Modifier.clickable { openFile(context, message.filePath, message.fileName ?: message.text) }
-                            else Modifier
-                        ),
-                    contentScale = ContentScale.Crop
-                )
+                Column(
+                    horizontalAlignment = if (message.isSentByMe) Alignment.End else Alignment.Start
+                ) {
+                    AsyncImage(
+                        model = message.filePath,
+                        contentDescription = message.fileName,
+                        modifier = Modifier
+                            .widthIn(max = 250.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .then(
+                                if (message.filePath != null)
+                                    Modifier.clickable { openFile(context, message.filePath, message.fileName ?: message.text) }
+                                else Modifier
+                            ),
+                        contentScale = ContentScale.Crop
+                    )
+                    if (!message.isSentByMe) {
+                        IconButton(
+                            onClick = onSaveToPhone,
+                            enabled = !message.isSavedToDevice
+                        ) {
+                            Icon(
+                                Icons.Default.FileDownload,
+                                contentDescription = if (message.isSavedToDevice) "Saved" else "Save to phone",
+                                tint = if (message.isSavedToDevice) Color.Gray else MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
             }
         }
         message.messageType == MessageType.FILE -> {
@@ -547,7 +724,7 @@ fun MessageBubble(message: ChatMessage) {
             ) {
                 Card(
                     modifier = Modifier
-                        .widthIn(max = 250.dp)
+                        .widthIn(max = 280.dp)
                         .then(
                             if (message.filePath != null)
                                 Modifier.clickable { openFile(context, message.filePath, message.fileName ?: message.text) }
@@ -568,7 +745,7 @@ fun MessageBubble(message: ChatMessage) {
                             tint = if (message.isSentByMe) Color.White else Color(0xFF2196F3)
                         )
                         Spacer(Modifier.width(8.dp))
-                        Column {
+                        Column(modifier = if (!message.isSentByMe) Modifier.weight(1f) else Modifier) {
                             Text(
                                 message.fileName ?: message.text,
                                 color = if (message.isSentByMe) Color.White else Color.Black,
@@ -579,6 +756,20 @@ fun MessageBubble(message: ChatMessage) {
                                     message.getFormattedSize(),
                                     color = if (message.isSentByMe) Color.White.copy(alpha = 0.7f) else Color.Gray,
                                     style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                        if (!message.isSentByMe) {
+                            Spacer(Modifier.width(4.dp))
+                            IconButton(
+                                onClick = onSaveToPhone,
+                                enabled = !message.isSavedToDevice,
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.FileDownload,
+                                    contentDescription = if (message.isSavedToDevice) "Saved" else "Save to phone",
+                                    tint = if (message.isSavedToDevice) Color.Gray else Color(0xFF2196F3)
                                 )
                             }
                         }
