@@ -638,8 +638,8 @@ fun ChatScreen(
                 state = listState,
                 contentPadding = PaddingValues(8.dp)
             ) {
-                items(messages) {
-                    MessageBubble(it, onSaveToPhone = { onSaveToPhone(it) })
+                items(messages) { message ->
+                    MessageBubble(message, onSaveToPhone = { onSaveToPhone(message) })
                 }
             }
 
