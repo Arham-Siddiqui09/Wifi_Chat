@@ -341,7 +341,7 @@ class ChatActivity : ComponentActivity(),
 
     /* ---------------- TEXT SEND ---------------- */
 
-    private fun sendMessage(text: String) {
+    private fun sendMessage(messageText: String) {
 
         if (!::writer.isInitialized) {
             addSystemMessage("Not connected yet")
@@ -349,12 +349,12 @@ class ChatActivity : ComponentActivity(),
         }
 
         messagesState.add(
-            ChatMessage(text = text, isSentByMe = true)
+            ChatMessage(text = messageText, isSentByMe = true)
         )
 
         Thread {
             try {
-                writer.println(text)
+                writer.println(messageText)
             } catch (e: Exception) {
                 runOnUiThread {
                     addSystemMessage("Send failed")
@@ -363,9 +363,9 @@ class ChatActivity : ComponentActivity(),
         }.start()
     }
 
-    private fun addSystemMessage(text: String) {
+    private fun addSystemMessage(messageText: String) {
         messagesState.add(
-            ChatMessage(text = text, isSentByMe = false, isSystemMessage = true)
+            ChatMessage(text = messageText, isSentByMe = false, isSystemMessage = true)
         )
     }
 
